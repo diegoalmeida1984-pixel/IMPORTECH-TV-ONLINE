@@ -3,8 +3,13 @@ package com.importech.tvonline;
 import android.app.*;
 import android.content.*;
 import android.graphics.Color;
+import android.net.Uri;
 import android.os.*;
+import android.provider.Settings;
 import android.widget.Toast;
+
+import androidx.core.content.FileProvider;
+
 import org.json.JSONObject;
 
 import java.io.*;
@@ -96,25 +101,133 @@ public class AgentService extends Service {
     }
 
     private void handleCommand(String msg) {
-        String display = null;
-
         if ("PING".equals(msg)) {
-            display = "✅ TESTE RECEBIDO DO PAINEL ADM";
-        } else if (msg.startsWith("PAIR|")) {
-            display = "✅ BOX VINCULADA — " + msg.substring(5);
-        } else if (msg.startsWith("NOTICE|")) {
-            display = "📢 " + msg.substring(7);
-            final String toastText = msg.substring(7);
-            new Handler(Looper.getMainLooper()).post(() ->
-                    Toast.makeText(this, toastText, Toast.LENGTH_LONG).show());
+            sendStatus("✅ TESTE RECEBIDO DO PAINEL ADM");
+            return;
         }
 
-        if (display != null) {
-            Intent i = new Intent("com.importech.tvonline.COMMAND");
-            i.setPackage(getPackageName());
-            i.putExtra("message", display);
-            sendBroadcast(i);
+        if (msg.startsWith("PAIR|")) {
+            sendStatus("✅ BOX VINCULADA — " + msg.substring(5));
+            return;
         }
+
+        if (msg.startsWith("NOTICE|")) {
+            String text = msg.substring(7);
+            sendStatus("📢 " + text);
+            new Handler(Looper.getMainLooper()).post(() ->
+                    Toast.makeText(this, text, Toast.LENGTH_LONG).show());
+            return;
+        }
+
+        if (msg.startsWith("INSTALL|")) {
+            String apkUrl = msg.substring(8).trim();
+            if (!apkUrl.startsWith("https://")) {
+                sendStatus("❌ Link do APK inválido");
+                return;
+            }
+            sendStatus("⬇️ Baixando APK...");
+            try {
+                File apk = downloadApk(apkUrl);
+                sendStatus("✅ APK baixado. Preparando instalação...");
+                requestInstall(apk);
+            } catch (Exception e) {
+                sendStatus("❌ Falha ao baixar/instalar APK: " + e.getMessage());
+            }
+        }
+    }
+
+    private File downloadApk(String apkUrl) throws Exception {
+        File dir = getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS);
+        if (dir == null) dir = getFilesDir();
+        if (!dir.exists()) dir.mkdirs();
+
+        File file = new File(dir, "importech-remoto.apk");
+        HttpURLConnection c = (HttpURLConnection) new URL(apkUrl).openConnection();
+        c.setInstanceFollowRedirects(true);
+        c.setConnectTimeout(20000);
+        c.setReadTimeout(60000);
+        c.setRequestProperty("User-Agent", "IMPORTECH-TV-ONLINE/2.0");
+        c.connect();
+
+        int status = c.getResponseCode();
+        if (status < 200 || status >= 300) {
+            throw new IOException("HTTP " + status);
+        }
+
+        try (InputStream in = c.getInputStream();
+             OutputStream out = new FileOutputStream(file)) {
+            byte[] buf = new byte[8192];
+            int n;
+            while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
+        } finally {
+            c.disconnect();
+        }
+
+        if (file.length() < 1024) throw new IOException("arquivo APK muito pequeno");
+        return file;
+    }
+
+    private void requestInstall(File apk) {
+        if (Build.VERSION.SDK_INT >= 26 &&
+                !getPackageManager().canRequestPackageInstalls()) {
+
+            sendStatus("⚠️ Autorize 'Instalar apps desconhecidos' para IMPORTECH TV ONLINE");
+
+            Intent settings = new Intent(
+                    Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                    Uri.parse("package:" + getPackageName()));
+            settings.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            try {
+                startActivity(settings);
+            } catch (Exception e) {
+                sendStatus("❌ Não consegui abrir a permissão de instalação");
+                return;
+            }
+
+            new Thread(() -> {
+                for (int i = 0; i < 60; i++) {
+                    sleep(1000);
+                    if (getPackageManager().canRequestPackageInstalls()) {
+                        installFile(apk);
+                        return;
+                    }
+                }
+                sendStatus("⚠️ Permissão não liberada. Envie o comando novamente.");
+            }).start();
+            return;
+        }
+
+        installFile(apk);
+    }
+
+    private void installFile(File apk) {
+        try {
+            Uri uri;
+            if (Build.VERSION.SDK_INT >= 24) {
+                uri = FileProvider.getUriForFile(
+                        this,
+                        getPackageName() + ".provider",
+                        apk);
+            } else {
+                uri = Uri.fromFile(apk);
+            }
+
+            Intent i = new Intent(Intent.ACTION_VIEW);
+            i.setDataAndType(uri, "application/vnd.android.package-archive");
+            i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            startActivity(i);
+            sendStatus("📦 Instalador aberto na TV. Confirme INSTALAR.");
+        } catch (Exception e) {
+            sendStatus("❌ Não consegui abrir o instalador: " + e.getMessage());
+        }
+    }
+
+    private void sendStatus(String display) {
+        Intent i = new Intent("com.importech.tvonline.COMMAND");
+        i.setPackage(getPackageName());
+        i.putExtra("message", display);
+        sendBroadcast(i);
     }
 
     private void sleep(long ms) {
