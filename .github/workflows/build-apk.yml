@@ -1,0 +1,109 @@
+name: Gerar APK IMPORTECH TV ONLINE
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Baixar arquivos
+        uses: actions/checkout@v4
+
+      - name: Preparar pastas do Android
+        run: |
+          mkdir -p app/src/main/java/com/importech/tvonline
+          mkdir -p app/src/main/res/values
+
+          cp AgentService.java app/src/main/java/com/importech/tvonline/
+          cp BootReceiver.java app/src/main/java/com/importech/tvonline/
+          cp DeviceId.java app/src/main/java/com/importech/tvonline/
+          cp MainActivity.java app/src/main/java/com/importech/tvonline/
+          cp AndroidManifest.xml app/src/main/
+          cp styles.xml app/src/main/res/values/
+
+      - name: Criar configuração principal
+        run: |
+          cat > settings.gradle <<'EOF'
+          pluginManagement {
+              repositories {
+                  google()
+                  mavenCentral()
+                  gradlePluginPortal()
+              }
+          }
+
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+          }
+
+          rootProject.name = "IMPORTECH-TV-ONLINE"
+          include(":app")
+          EOF
+
+          cat > build.gradle <<'EOF'
+          plugins {
+              id 'com.android.application' version '8.7.3' apply false
+          }
+          EOF
+
+          cat > app/build.gradle <<'EOF'
+          plugins {
+              id 'com.android.application'
+          }
+
+          android {
+              namespace 'com.importech.tvonline'
+              compileSdk 35
+
+              defaultConfig {
+                  applicationId "com.importech.tvonline"
+                  minSdk 21
+                  targetSdk 28
+                  versionCode 1
+                  versionName "1.0"
+              }
+
+              compileOptions {
+                  sourceCompatibility JavaVersion.VERSION_1_8
+                  targetCompatibility JavaVersion.VERSION_1_8
+              }
+          }
+          EOF
+
+      - name: Configurar Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Configurar Android
+        uses: android-actions/setup-android@v3
+
+      - name: Instalar Android SDK
+        run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
+
+      - name: Configurar Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Gerar APK
+        run: gradle assembleDebug
+
+      - name: Renomear APK
+        run: cp app/build/outputs/apk/debug/app-debug.apk IMPORTECH-TV-ONLINE.apk
+
+      - name: Salvar APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: IMPORTECH-TV-ONLINE
+          path: IMPORTECH-TV-ONLINE.apk
